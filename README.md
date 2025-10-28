@@ -78,7 +78,7 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
 - **vCPUs**: 4
 - **Memory**: 16GB RAM
 - **Best For**: Single GPU testing, development, small batch processing
-- **Approximate Cost**: ~$1.00/hour (us-east-1)
+- **Approximate Cost**: ~$1.1/hour
 
 **g5.12xlarge**
 - **GPU**: 4x NVIDIA A10G
@@ -86,7 +86,7 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
 - **vCPUs**: 48
 - **Memory**: 192GB RAM
 - **Best For**: Multi-GPU production, large batch processing, maximum throughput
-- **Approximate Cost**: ~$3.00/hour (us-east-1)
+- **Approximate Cost**: ~$5.6/hour
 
 ### Performance Benchmarking
 
@@ -114,63 +114,6 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
 | Multi Process (2x) | 6-8GB per process | 16GB | Shared model loading |
 | Multi-GPU (4x) | 8-10GB per GPU | 12GB per GPU | Independent GPU memory |
 
-### Cost Analysis (AWS)
-
-#### Processing 1000 Images
-- **g5.xlarge (Single GPU)**: ~$2-3
-- **g5.12xlarge (Multi-GPU)**: ~$1-2 (faster processing)
-- **Cost per Image**: $0.002-0.003
-
-#### Recommended Instance Selection
-- **Development/Testing**: g5.xlarge
-- **Production (Small batches)**: g5.xlarge with multi-process
-- **Production (Large batches)**: g5.12xlarge with multi-GPU multi-process
-- **Maximum Throughput**: g5.12xlarge with all optimizations
-
-### AWS Setup Guide
-
-#### Quick Start Commands
-```bash
-# Launch g5.xlarge instance
-aws ec2 run-instances \
-    --image-id ami-0c02fb55956c7d316 \
-    --instance-type g5.xlarge \
-    --key-name your-key-pair \
-    --security-group-ids sg-xxxxxxxxx
-
-# Launch g5.12xlarge instance
-aws ec2 run-instances \
-    --image-id ami-0c02fb55956c7d316 \
-    --instance-type g5.12xlarge \
-    --key-name your-key-pair \
-    --security-group-ids sg-xxxxxxxxx
-```
-
-#### Instance Configuration
-- **AMI**: Deep Learning AMI (Ubuntu 20.04) Version 60.0
-- **Storage**: 100GB GP3 SSD (recommended)
-- **Security Group**: Allow SSH (22) and HTTP/HTTPS (80/443)
-- **IAM Role**: EC2 instance role with S3 access (for data)
-
-#### Post-Launch Setup
-```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install additional dependencies
-pip install nvitop  # For GPU monitoring
-
-# Clone repository
-git clone https://github.com/connectaman/deepseek-ocr-multigpu-infer.git
-cd deepseek-ocr-multigpu-infer
-
-# Install requirements
-pip install -r requirements.txt
-
-# Test GPU availability
-nvidia-smi
-nvitop
-```
 
 ## Installation
 

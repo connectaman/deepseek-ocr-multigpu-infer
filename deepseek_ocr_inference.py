@@ -221,7 +221,7 @@ class DeepSeekOCRInference:
     def process_images(self, input_folder: str, output_folder: str, 
                       prompt: str = "<image>\n<|grounding|>Convert the document to markdown. ",
                       base_size: int = 1024, image_size: int = 640, 
-                      crop_mode: bool = True) -> pd.DataFrame:
+                      crop_mode: bool = True, num_processes: int = 1) -> pd.DataFrame:
         """
         Process all images in the input folder using single GPU inference.
         
@@ -232,6 +232,7 @@ class DeepSeekOCRInference:
             base_size: Base size parameter for the model
             image_size: Image size parameter for the model
             crop_mode: Whether to use crop mode
+            num_processes: Number of processes to run on the GPU (1-2, default: 1)
             
         Returns:
             DataFrame with processing results
@@ -242,28 +243,66 @@ class DeepSeekOCRInference:
         # Get image files
         image_files = self.get_image_files(input_folder)
         
-        # Process images
-        results = []
-        start_time = time.time()
+        # Validate num_processes
+        if num_processes < 1 or num_processes > 2:
+            raise ValueError("num_processes must be between 1 and 2")
         
-        logger.info(f"Starting single GPU inference on {self.gpu_name}...")
-        
-        for i, image_file in enumerate(image_files, 1):
-            logger.info(f"Processing image {i}/{len(image_files)}")
+        if num_processes == 1:
+            # Single process mode (original behavior)
+            results = []
+            start_time = time.time()
             
-            result = self.process_single_image(
-                image_file=image_file,
-                output_folder=output_folder,
-                prompt=prompt,
-                base_size=base_size,
-                image_size=image_size,
-                crop_mode=crop_mode
-            )
+            logger.info(f"Starting single GPU inference on {self.gpu_name}...")
             
-            results.append(result)
-        
-        end_time = time.time()
-        total_time = end_time - start_time
+            for i, image_file in enumerate(image_files, 1):
+                logger.info(f"Processing image {i}/{len(image_files)}")
+                
+                result = self.process_single_image(
+                    image_file=image_file,
+                    output_folder=output_folder,
+                    prompt=prompt,
+                    base_size=base_size,
+                    image_size=image_size,
+                    crop_mode=crop_mode
+                )
+                
+                results.append(result)
+            
+            end_time = time.time()
+            total_time = end_time - start_time
+            
+        else:
+            # Multi-process mode
+            logger.info(f"Starting single GPU multi-process inference on {self.gpu_name} with {num_processes} processes...")
+            
+            # Split images among processes
+            image_splits = [image_files[i::num_processes] for i in range(num_processes)]
+            
+            # Shared results for multiprocessing
+            manager = Manager()
+            shared_results = manager.list()
+            
+            # Launch processes
+            processes = []
+            start_time = time.time()
+            
+            for proc_id in range(num_processes):
+                if image_splits[proc_id]:  # Only start process if there are images to process
+                    p = Process(
+                        target=self.run_inference_process,
+                        args=(proc_id, image_splits[proc_id], shared_results, 
+                              output_folder, prompt, base_size, image_size, crop_mode)
+                    )
+                    p.start()
+                    processes.append(p)
+            
+            # Wait for all processes to complete
+            for p in processes:
+                p.join()
+            
+            end_time = time.time()
+            total_time = end_time - start_time
+            results = list(shared_results)
         
         # Create results DataFrame
         df = pd.DataFrame(results)
@@ -281,6 +320,115 @@ class DeepSeekOCRInference:
             logger.warning("No results to process")
         
         return df
+    
+    def run_inference_process(self, proc_id: int, image_files: List[str], 
+                            shared_results: List[Dict], output_folder: str,
+                            prompt: str, base_size: int, image_size: int, 
+                            crop_mode: bool) -> None:
+        """
+        Run inference in a separate process for multi-process mode.
+        
+        Args:
+            proc_id: Process ID
+            image_files: List of image files to process
+            shared_results: Shared results list for multiprocessing
+            output_folder: Output folder for markdown files
+            prompt: Prompt for the OCR model
+            base_size: Base size parameter for the model
+            image_size: Image size parameter for the model
+            crop_mode: Whether to use crop mode
+        """
+        # Set CUDA device for this process
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
+        
+        # Suppress transformers logging in subprocess
+        import transformers
+        transformers.logging.set_verbosity_error()
+        
+        device = torch.device("cuda:0")
+        
+        logger.info(f"[Process {proc_id}] Initializing model...")
+        
+        try:
+            # Load model and tokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+            model = AutoModel.from_pretrained(
+                self.model_name,
+                _attn_implementation='flash_attention_2',
+                trust_remote_code=True,
+                use_safetensors=True
+            ).to(device=device, dtype=torch.bfloat16).eval()
+            
+            # Get GPU info
+            gpu_name, gpu_max_memory, _ = self.get_gpu_info(0)
+            logger.info(f"[Process {proc_id}] Model loaded on {gpu_name} ({gpu_max_memory:.1f} GB)")
+            
+            # Process images
+            for i, image_file in enumerate(image_files, 1):
+                filename = os.path.basename(image_file)
+                markdown_filename = os.path.splitext(filename)[0] + ".md"
+                output_path = os.path.join(output_folder, markdown_filename)
+                
+                logger.info(f"[Process {proc_id}] Processing {filename} ({i}/{len(image_files)})")
+                
+                try:
+                    # Run inference with suppressed output
+                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        result = model.infer(
+                            tokenizer,
+                            prompt=prompt,
+                            image_file=image_file,
+                            output_path=output_path,
+                            base_size=base_size,
+                            image_size=image_size,
+                            crop_mode=crop_mode,
+                            save_results=True,
+                            test_compress=True
+                        )
+                    
+                    logger.info(f"[Process {proc_id}] ✓ Successfully processed {filename}")
+                    
+                    # Record successful processing
+                    shared_results.append({
+                        "filename": filename,
+                        "markdown_filename": markdown_filename,
+                        "gpu_id": self.gpu_id,
+                        "process_id": proc_id,
+                        "gpu_name": gpu_name,
+                        "status": "success"
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"[Process {proc_id}] ✗ Error processing {filename}: {str(e)}")
+                    
+                    # Record failed processing
+                    shared_results.append({
+                        "filename": filename,
+                        "markdown_filename": markdown_filename,
+                        "gpu_id": self.gpu_id,
+                        "process_id": proc_id,
+                        "gpu_name": gpu_name,
+                        "status": "error",
+                        "error": str(e)
+                    })
+            
+            logger.info(f"[Process {proc_id}] Completed processing {len(image_files)} images")
+            
+        except Exception as e:
+            logger.error(f"[Process {proc_id}] Failed to initialize model: {str(e)}")
+            # Record process failure
+            for image_file in image_files:
+                filename = os.path.basename(image_file)
+                markdown_filename = os.path.splitext(filename)[0] + ".md"
+                shared_results.append({
+                    "filename": filename,
+                    "markdown_filename": markdown_filename,
+                    "gpu_id": self.gpu_id,
+                    "process_id": proc_id,
+                    "gpu_name": "Unknown",
+                    "status": "process_error",
+                    "error": str(e)
+                })
 
 
 def main():
@@ -355,6 +503,14 @@ Model Size Presets:
     )
     
     parser.add_argument(
+        "--num-processes",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Number of processes to run on the GPU (1-2, default: 1)"
+    )
+    
+    parser.add_argument(
         "--results-file",
         default="single_gpu_inference_results.xlsx",
         help="Output Excel file for processing results (default: single_gpu_inference_results.xlsx)"
@@ -373,7 +529,8 @@ Model Size Presets:
             prompt=args.prompt,
             base_size=args.base_size,
             image_size=args.image_size,
-            crop_mode=args.crop_mode
+            crop_mode=args.crop_mode,
+            num_processes=args.num_processes
         )
         
         # Save results

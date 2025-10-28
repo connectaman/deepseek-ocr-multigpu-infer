@@ -8,6 +8,7 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
 
 **Repository**: [https://github.com/connectaman/deepseek-ocr-multigpu-infer](https://github.com/connectaman/deepseek-ocr-multigpu-infer)
 
+
 ## Scripts Available
 
 ### 1. Single GPU Inference (`deepseek_ocr_inference.py`)
@@ -15,12 +16,14 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
 - ⚡ **Fast Setup**: Quick model loading and processing
 - 🔧 **Model Presets**: Built-in presets for different model sizes
 - 📝 **Crop Mode**: Optional crop mode for better performance
+- 🔄 **Multi-Process**: Support for 1-2 processes per GPU for maximum utilization
 
 ### 2. Multi-GPU Inference (`deepseek_ocr_multigpu_inference.py`)
 - 🚀 **Multi-GPU Support**: Automatically detects and utilizes all available CUDA GPUs
 - 📁 **Parallel Processing**: Processes entire folders of images in parallel
 - ⚖️ **Load Balancing**: Efficiently distributes work across GPUs
 - 📊 **Scalable**: Scales with your hardware
+- 🔄 **Multi-Process**: Support for 1-2 processes per GPU for maximum utilization
 
 ## Common Features
 
@@ -56,6 +59,34 @@ Professional, production-ready Python scripts for running DeepSeek-OCR inference
    pip install -r requirements.txt
    ```
 
+## 🚀 Inference Approaches
+
+This repository supports **4 different inference approaches** to maximize GPU utilization and processing speed:
+
+### 1. Single GPU - Single Process
+- **Use Case**: Basic single GPU setups, testing, or when you want simple processing
+- **Command**: `python deepseek_ocr_inference.py input_folder output_folder`
+- **Processes**: 1 process on 1 GPU
+- **Best For**: Simple setups, testing, or when you have limited GPU memory
+
+### 2. Single GPU - Multi Process
+- **Use Case**: Maximum utilization of a single powerful GPU
+- **Command**: `python deepseek_ocr_inference.py input_folder output_folder --num-processes 2`
+- **Processes**: 2 processes on 1 GPU
+- **Best For**: High-end single GPU setups (RTX 4090, A100, etc.)
+
+### 3. Multi-GPU - Single Process per GPU
+- **Use Case**: Multiple GPUs with standard utilization
+- **Command**: `python deepseek_ocr_multigpu_inference.py input_folder output_folder`
+- **Processes**: 1 process per GPU
+- **Best For**: Multi-GPU setups with moderate processing needs
+
+### 4. Multi-GPU - Multi Process per GPU
+- **Use Case**: Maximum utilization across multiple GPUs
+- **Command**: `python deepseek_ocr_multigpu_inference.py input_folder output_folder --num-processes-per-gpu 2`
+- **Processes**: 2 processes per GPU (e.g., 4 processes on 2 GPUs)
+- **Best For**: High-performance multi-GPU setups for maximum throughput
+
 ## Usage
 
 ### Single GPU Inference
@@ -73,7 +104,13 @@ python deepseek_ocr_inference.py ./images ./results \
     --image-size 640 \
     --crop-mode \
     --gpu-id 0 \
+    --num-processes 2 \
     --results-file my_results.xlsx
+```
+
+#### Multi-Process Usage (Maximum GPU Utilization)
+```bash
+python deepseek_ocr_inference.py ./images ./results --num-processes 2
 ```
 
 #### Model Size Presets
@@ -107,7 +144,13 @@ python deepseek_ocr_multigpu_inference.py ./images ./results \
     --prompt "Convert this document to markdown" \
     --base-size 1024 \
     --image-size 1280 \
+    --num-processes-per-gpu 2 \
     --results-file multigpu_results.xlsx
+```
+
+#### Multi-Process per GPU (Maximum Utilization)
+```bash
+python deepseek_ocr_multigpu_inference.py ./images ./results --num-processes-per-gpu 2
 ```
 
 ### Command Line Arguments
@@ -123,6 +166,7 @@ python deepseek_ocr_multigpu_inference.py ./images ./results \
 | `--image-size` | ❌ | `640` | Image size parameter for model |
 | `--crop-mode` | ❌ | `False` | Enable crop mode for processing |
 | `--gpu-id` | ❌ | `0` | GPU device ID to use |
+| `--num-processes` | ❌ | `1` | Number of processes on GPU (1-2) |
 | `--results-file` | ❌ | `single_gpu_inference_results.xlsx` | Excel file for processing results |
 
 #### Multi-GPU Script (`deepseek_ocr_multigpu_inference.py`)
@@ -134,6 +178,7 @@ python deepseek_ocr_multigpu_inference.py ./images ./results \
 | `--prompt` | ❌ | `"<image>\n<|grounding|>Convert the document to markdown. "` | Custom prompt for OCR model |
 | `--base-size` | ❌ | `1024` | Base size parameter for model |
 | `--image-size` | ❌ | `1280` | Image size parameter for model |
+| `--num-processes-per-gpu` | ❌ | `1` | Number of processes per GPU (1-2) |
 | `--results-file` | ❌ | `multigpu_inference_results.xlsx` | Excel file for processing results |
 
 ### Supported Image Formats
@@ -162,7 +207,8 @@ This will show real-time GPU utilization, memory usage, and temperature for all 
 
 #### GPU Monitoring Screenshot
 
-![GPU Monitoring with nvitop](screenshot/gpu.png)
+![GPU Monitoring with nvitop](screenshot/gpu1.png)
+![GPU Monitoring with nvitop](screenshot/gpu2.png)
 
 *Example of nvitop showing GPU utilization during DeepSeek-OCR inference across multiple GPUs*
 
@@ -235,6 +281,27 @@ The Excel file contains processing metadata:
 - `status`: Processing status (success/error)
 - `error`: Error message (if applicable)
 
+## 📊 Performance Comparison
+
+### Processing Speed (Approximate)
+| Approach | GPU Setup | Processes | Use Case | Speed |
+|----------|-----------|-----------|----------|-------|
+| Single GPU - Single Process | 1 GPU | 1 | Basic processing | 1x |
+| Single GPU - Multi Process | 1 GPU | 2 | High-end single GPU | 1.5-1.8x |
+| Multi-GPU - Single Process | 2+ GPUs | 1 per GPU | Standard multi-GPU | 2x (2 GPUs) |
+| Multi-GPU - Multi Process | 2+ GPUs | 2 per GPU | Maximum throughput | 3-3.5x (2 GPUs) |
+
+### Memory Requirements
+- **Single Process**: ~8-12GB GPU memory per process
+- **Multi Process**: ~6-8GB GPU memory per process (due to shared model loading)
+- **Recommended**: RTX 4090 (24GB) or A100 (40GB) for multi-process setups
+
+### When to Use Each Approach
+1. **Single GPU - Single Process**: Testing, development, or limited GPU memory
+2. **Single GPU - Multi Process**: High-end single GPU with plenty of memory
+3. **Multi-GPU - Single Process**: Multiple GPUs with standard processing needs
+4. **Multi-GPU - Multi Process**: Production environments requiring maximum throughput
+
 ## Performance Tips
 
 ### Single GPU Optimization
@@ -283,6 +350,13 @@ logging.basicConfig(level=logging.DEBUG, ...)
 ## License
 
 MIT License - see LICENSE file for details.
+
+## 👨‍💻 Author
+
+**Aman Ulla**
+- 📫 Contact: [connectamanulla@gmail.com](mailto:connectamanulla@gmail.com)
+- 🌐 Portfolio: [amanulla.in](http://www.amanulla.in)
+- 🔗 [GitHub](https://github.com/connectaman) • [LinkedIn](https://linkedin.com/in/connectaman) • [Twitter](https://twitter.com/connectaman1)
 
 ## Contributing
 

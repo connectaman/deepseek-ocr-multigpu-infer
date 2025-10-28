@@ -111,7 +111,7 @@ class DeepSeekOCRMultiGPUInference:
             return gpu_name, gpu_max_memory, gpu_used
         return "N/A", 0, 0
     
-    def run_inference_on_gpu(self, gpu_id: int, image_files: List[str], 
+    def run_inference_on_gpu(self, gpu_id: int, proc_id: int, image_files: List[str], 
                            shared_results: List[Dict], output_folder: str,
                            prompt: str, base_size: int, image_size: int) -> None:
         """
@@ -119,6 +119,7 @@ class DeepSeekOCRMultiGPUInference:
         
         Args:
             gpu_id: GPU device ID
+            proc_id: Process ID within the GPU
             image_files: List of image files to process on this GPU
             shared_results: Shared results list for multiprocessing
             output_folder: Output folder for markdown files
@@ -135,7 +136,7 @@ class DeepSeekOCRMultiGPUInference:
         
         device = torch.device("cuda:0")
         
-        logger.info(f"[GPU {gpu_id}] Initializing model...")
+        logger.info(f"[GPU {gpu_id} - Process {proc_id}] Initializing model...")
         
         try:
             # Load model and tokenizer
@@ -149,7 +150,7 @@ class DeepSeekOCRMultiGPUInference:
             
             # Get GPU info
             gpu_name, gpu_max_memory, _ = self.get_gpu_info(0)
-            logger.info(f"[GPU {gpu_id}] Model loaded on {gpu_name} ({gpu_max_memory:.1f} GB)")
+            logger.info(f"[GPU {gpu_id} - Process {proc_id}] Model loaded on {gpu_name} ({gpu_max_memory:.1f} GB)")
             
             # Process images
             for i, image_file in enumerate(image_files, 1):
@@ -157,7 +158,7 @@ class DeepSeekOCRMultiGPUInference:
                 markdown_filename = os.path.splitext(filename)[0] + ".md"
                 output_path = os.path.join(output_folder, markdown_filename)
                 
-                logger.info(f"[GPU {gpu_id}] Processing {filename} ({i}/{len(image_files)})")
+                logger.info(f"[GPU {gpu_id} - Process {proc_id}] Processing {filename} ({i}/{len(image_files)})")
                 
                 try:
                     # Run inference with suppressed output
@@ -174,34 +175,36 @@ class DeepSeekOCRMultiGPUInference:
                             test_compress=True
                         )
                     
-                    logger.info(f"[GPU {gpu_id}] ✓ Successfully processed {filename}")
+                    logger.info(f"[GPU {gpu_id} - Process {proc_id}] ✓ Successfully processed {filename}")
                     
                     # Record successful processing
                     shared_results.append({
                         "filename": filename,
                         "markdown_filename": markdown_filename,
                         "gpu_id": gpu_id,
+                        "process_id": proc_id,
                         "gpu_name": gpu_name,
                         "status": "success"
                     })
                     
                 except Exception as e:
-                    logger.error(f"[GPU {gpu_id}] ✗ Error processing {filename}: {str(e)}")
+                    logger.error(f"[GPU {gpu_id} - Process {proc_id}] ✗ Error processing {filename}: {str(e)}")
                     
                     # Record failed processing
                     shared_results.append({
                         "filename": filename,
                         "markdown_filename": markdown_filename,
                         "gpu_id": gpu_id,
+                        "process_id": proc_id,
                         "gpu_name": gpu_name,
                         "status": "error",
                         "error": str(e)
                     })
             
-            logger.info(f"[GPU {gpu_id}] Completed processing {len(image_files)} images")
+            logger.info(f"[GPU {gpu_id} - Process {proc_id}] Completed processing {len(image_files)} images")
             
         except Exception as e:
-            logger.error(f"[GPU {gpu_id}] Failed to initialize model: {str(e)}")
+            logger.error(f"[GPU {gpu_id} - Process {proc_id}] Failed to initialize model: {str(e)}")
             # Record GPU failure
             for image_file in image_files:
                 filename = os.path.basename(image_file)
@@ -210,6 +213,7 @@ class DeepSeekOCRMultiGPUInference:
                     "filename": filename,
                     "markdown_filename": markdown_filename,
                     "gpu_id": gpu_id,
+                    "process_id": proc_id,
                     "gpu_name": "Unknown",
                     "status": "gpu_error",
                     "error": str(e)
@@ -217,7 +221,8 @@ class DeepSeekOCRMultiGPUInference:
     
     def process_images(self, input_folder: str, output_folder: str, 
                       prompt: str = "<image>\n<|grounding|>Convert the document to markdown. ",
-                      base_size: int = 1024, image_size: int = 1280) -> pd.DataFrame:
+                      base_size: int = 1024, image_size: int = 1280, 
+                      num_processes_per_gpu: int = 1) -> pd.DataFrame:
         """
         Process all images in the input folder using multi-GPU inference.
         
@@ -227,6 +232,7 @@ class DeepSeekOCRMultiGPUInference:
             prompt: Prompt for the OCR model
             base_size: Base size parameter for the model
             image_size: Image size parameter for the model
+            num_processes_per_gpu: Number of processes per GPU (1-2, default: 1)
             
         Returns:
             DataFrame with processing results
@@ -237,12 +243,23 @@ class DeepSeekOCRMultiGPUInference:
         # Get image files
         image_files = self.get_image_files(input_folder)
         
-        # Split images among GPUs
-        image_splits = [image_files[i::self.num_gpus] for i in range(self.num_gpus)]
+        # Validate num_processes_per_gpu
+        if num_processes_per_gpu < 1 or num_processes_per_gpu > 2:
+            raise ValueError("num_processes_per_gpu must be between 1 and 2")
+        
+        # Calculate total processes
+        total_processes = self.num_gpus * num_processes_per_gpu
+        
+        # Split images among all processes
+        image_splits = [image_files[i::total_processes] for i in range(total_processes)]
         
         # Log distribution
-        for gpu_id, images in enumerate(image_splits):
-            logger.info(f"GPU {gpu_id} will process {len(images)} images")
+        logger.info(f"Launching {total_processes} total processes ({num_processes_per_gpu} per GPU)")
+        for gpu_id in range(self.num_gpus):
+            for proc_id in range(num_processes_per_gpu):
+                global_proc_id = gpu_id * num_processes_per_gpu + proc_id
+                images_count = len(image_splits[global_proc_id]) if global_proc_id < len(image_splits) else 0
+                logger.info(f"GPU {gpu_id} Process {proc_id} will process {images_count} images")
         
         # Shared results for multiprocessing
         manager = Manager()
@@ -252,17 +269,19 @@ class DeepSeekOCRMultiGPUInference:
         processes = []
         start_time = time.time()
         
-        logger.info("Starting multi-GPU inference...")
+        logger.info("Starting multi-GPU multi-process inference...")
         
         for gpu_id in range(self.num_gpus):
-            if image_splits[gpu_id]:  # Only start process if there are images to process
-                p = Process(
-                    target=self.run_inference_on_gpu,
-                    args=(gpu_id, image_splits[gpu_id], shared_results, 
-                          output_folder, prompt, base_size, image_size)
-                )
-                p.start()
-                processes.append(p)
+            for proc_id in range(num_processes_per_gpu):
+                global_proc_id = gpu_id * num_processes_per_gpu + proc_id
+                if global_proc_id < len(image_splits) and image_splits[global_proc_id]:  # Only start process if there are images to process
+                    p = Process(
+                        target=self.run_inference_on_gpu,
+                        args=(gpu_id, proc_id, image_splits[global_proc_id], shared_results, 
+                              output_folder, prompt, base_size, image_size)
+                    )
+                    p.start()
+                    processes.append(p)
         
         # Wait for all processes to complete
         for p in processes:
@@ -333,6 +352,14 @@ Examples:
     )
     
     parser.add_argument(
+        "--num-processes-per-gpu",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Number of processes per GPU (1-2, default: 1)"
+    )
+    
+    parser.add_argument(
         "--results-file",
         default="multigpu_inference_results.xlsx",
         help="Output Excel file for processing results (default: multigpu_inference_results.xlsx)"
@@ -350,7 +377,8 @@ Examples:
             output_folder=args.output_folder,
             prompt=args.prompt,
             base_size=args.base_size,
-            image_size=args.image_size
+            image_size=args.image_size,
+            num_processes_per_gpu=args.num_processes_per_gpu
         )
         
         # Save results
